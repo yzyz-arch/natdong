@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+*.log
+bot.db
+bot.pid
+.env
+instances/
+data/
