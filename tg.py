@@ -50,6 +50,10 @@ def api(method: str, http_timeout: int = 30, **params):
         raise TgError(f"{method}: HTTP {exc.code} {body[:300]}") from exc
     except urllib.error.URLError as exc:
         raise TgError(f"{method}: {exc.reason}") from exc
+    except TimeoutError as exc:                       # read timeout mentah, bukan URLError
+        raise TgError(f"{method}: timeout") from exc
+    except OSError as exc:
+        raise TgError(f"{method}: {exc}") from exc
     if not payload.get("ok"):
         raise TgError(f"{method}: {payload.get('description')}")
     return payload.get("result")
@@ -99,11 +103,36 @@ def delete(chat_id: int, message_id: int) -> None:
         pass
 
 
+_last_err = {"msg": "", "at": 0.0}
+
+
+def log(msg: str) -> None:
+    print(f"[{time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())}] {msg}", flush=True)
+
+
+def _log_once(msg: str, every: int = 60) -> None:
+    """Jangan spam log kalau error-nya berulang."""
+    now = time.time()
+    if msg != _last_err["msg"] or now - _last_err["at"] > every:
+        _last_err["msg"] = msg
+        _last_err["at"] = now
+        log(msg)
+
+
 def get_updates(offset: int, timeout: int = 30) -> list[dict]:
+    """Nggak pernah raise — polling harus tahan jaringan ngadat."""
     try:
-        return api("getUpdates", http_timeout=timeout + 10, offset=offset,
+        return api("getUpdates", http_timeout=timeout + 15, offset=offset,
                    timeout=timeout, allowed_updates=["message"])
-    except TgError:
+    except TgError as exc:
+        text = str(exc)
+        if "409" in text or "Conflict" in text.lower():
+            _log_once("konflik: ada instance bot lain yang polling dengan token sama")
+        else:
+            _log_once(f"getUpdates gagal: {text[:160]}")
+        return []
+    except Exception as exc:                          # jaring pengaman terakhir
+        _log_once(f"getUpdates error tak terduga: {type(exc).__name__}: {exc}")
         return []
 
 
@@ -112,23 +141,32 @@ def me() -> dict:
 
 
 def poll_forever(handler, offset: int = 0) -> None:
+    log("polling mulai")
+    backoff = 1.0
     while True:
-        updates = get_updates(offset)
-        if not updates:
-            time.sleep(1)
-            continue
-        for upd in updates:
-            offset = max(offset, upd["update_id"] + 1)
-            msg = upd.get("message")
-            if not msg or "text" not in msg:
+        try:
+            updates = get_updates(offset)
+            if not updates:
+                time.sleep(backoff)
+                backoff = min(backoff + 1.0, 5.0)
                 continue
-            try:
-                handler(msg)
-            except Exception as exc:  # jangan sampai loop mati
+            backoff = 1.0
+            for upd in updates:
+                offset = max(offset, upd["update_id"] + 1)
+                msg = upd.get("message")
+                if not msg or "text" not in msg:
+                    continue
                 try:
-                    send(msg["chat"]["id"], f"<b>error</b>\n<code>{esc(exc)}</code>")
-                except Exception:
-                    pass
+                    handler(msg)
+                except Exception as exc:  # error handler jangan matiin bot
+                    log(f"handler error: {type(exc).__name__}: {exc}")
+                    try:
+                        send(msg["chat"]["id"], f"<b>error</b>\n<code>{esc(exc)}</code>")
+                    except Exception:
+                        pass
+        except Exception as exc:      # loop ini nggak boleh mati
+            log(f"loop error: {type(exc).__name__}: {exc}")
+            time.sleep(3)
 
 
 def parse_command(text: str) -> tuple[str, list[str]]:

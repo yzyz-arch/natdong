@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# start.sh — jalanin bot di background pakai pidfile
+# start.sh — jalanin bot di background pakai pidfile + supervisor (auto-restart)
 # Override lewat env: APP_DIR, ENV_FILE, RUN_DIR
 set -euo pipefail
 
@@ -26,12 +26,21 @@ set -a
 . "$ENV_FILE"
 set +a
 
-setsid python3 bot.py >>"$LOG_FILE" 2>&1 </dev/null &
+# supervisor: bot exit/error apa pun, dihidupkan lagi 5 detik kemudian
+setsid bash -c '
+  while true; do
+    python3 bot.py >>"$0" 2>&1
+    code=$?
+    printf "[supervisor %s] bot exit=%s, restart 5s\n" "$(date -u +%FT%TZ)" "$code" >>"$0"
+    sleep 5
+  done
+' "$LOG_FILE" </dev/null >/dev/null 2>&1 &
+
 echo $! > "$PID_FILE"
 sleep 4
 
 if kill -0 "$(cat "$PID_FILE")" 2>/dev/null; then
-  echo "started pid $(cat "$PID_FILE")"
+  echo "started pid $(cat "$PID_FILE") (supervisor + bot)"
 else
   echo "gagal start, cek $LOG_FILE" >&2
   tail -5 "$LOG_FILE" >&2

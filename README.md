@@ -84,7 +84,7 @@ langsung `CRASHED`.
 | `store.py` | sqlite: token user (obfuscated), instance, migrasi kolom |
 | `config.py` | env config |
 | `selftest.py` | test tanpa Telegram & tanpa token |
-| `start.sh` / `stop.sh` | daemon sederhana pakai pidfile |
+| `start.sh` / `stop.sh` | daemon pakai pidfile + supervisor (bot crash → auto-restart 5s) |
 | `railway-nat-bot.service` | unit systemd |
 
 ## Environment
@@ -101,6 +101,16 @@ langsung `CRASHED`.
 | `DEFAULT_REGION` | `sg` | `sg` / `us` / `eu` |
 | `BOT_SECRET` | `railway-nat-bot` | salt obfuscation token di sqlite |
 | `CMD_TIMEOUT` | `180` | timeout per command CLI |
+
+## Ketahanan
+
+- `tg.api()` nangkep `URLError`, `TimeoutError`, dan `OSError` → jadi `TgError`.
+  Tanpa ini, satu read timeout bisa membunuh seluruh proses (kejadian nyata).
+- `get_updates()` nggak pernah raise; error di-log maksimal sekali per menit.
+- `poll_forever()` punya try/except di level loop + backoff, jadi nggak mati
+  gara-gara handler error.
+- `start.sh` bungkus bot pakai supervisor loop: exit code apa pun → hidup lagi
+  5 detik kemudian. `stop.sh` membunuh satu process group (supervisor + bot).
 
 ## Batasan yang ketemu di lapangan
 
